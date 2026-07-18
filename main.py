@@ -34,7 +34,7 @@ class TikTokSniper:
         }
         
         self.session = requests.Session()
-        adapter = HTTPAdapter(pool_connections=1000, pool_maxsize=1000)
+        adapter = HTTPAdapter(pool_connections=1000, pool_maxsize=1000, max_retries=0)
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
 
@@ -56,7 +56,7 @@ class TikTokSniper:
             "message": message,
             "color": color
         })
-        if len(self.logs) > 60:
+        if len(self.logs) > 100:
             self.logs.pop(0)
 
     def send_telegram(self, username):
@@ -82,11 +82,12 @@ class TikTokSniper:
             proxy = {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"} if proxy_str else None
 
             try:
+                # 4 second timeout is optimal for slow cloud networks
                 r = self.session.get(
                     f"https://www.tiktok.com/@{username}", 
                     headers=self.headers, 
                     proxies=proxy, 
-                    timeout=3, 
+                    timeout=4, 
                     allow_redirects=False
                 )
                 
@@ -100,13 +101,13 @@ class TikTokSniper:
                 
                 self.counter += 1
             except Exception as e:
-                # Log failures so you can tell if your proxies are dead!
                 err_msg = str(e)
                 if "timeout" in err_msg.lower():
                     self.add_log("Proxy Timeout", f"Proxy {proxy_str} timed out.", "#FF9F0A")
                 else:
                     self.add_log("Proxy Error", f"Bad Connection: {proxy_str}", "#FF3B30")
-                time.sleep(0.1)
+                # Drop thread delay slightly to let other threads process
+                time.sleep(0.2)
 
     def rps_calculator(self):
         while not self.stop_event.is_set():
@@ -116,7 +117,7 @@ class TikTokSniper:
 
 sniper = TikTokSniper()
 
-# Fixed Front-End HTML utilizing safe JavaScript parsing
+# Front-End HTML with Copy Logs button
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -294,6 +295,7 @@ HTML_TEMPLATE = """
             <div class="console-logs" id="logs-box">
                 <div style="color: #666;">System ready. Paste proxies, configure, and hit start.</div>
             </div>
+            <button onclick="copyLogs()" class="btn" style="background-color: #555; color: #fff; padding: 8px;">Copy Logs</button>
         </div>
     </div>
 
@@ -315,7 +317,6 @@ HTML_TEMPLATE = """
                         data.logs.forEach(log => {
                             const item = document.createElement('div');
                             item.className = 'log-item';
-                            // Safe older JS concatenation avoids flask parsing errors
                             item.innerHTML = '<span class="log-time">[' + log.time + ']</span> ' +
                                              '<span style="color: ' + log.color + '">[' + log.status + ']</span> ' +
                                              '<span>' + log.message + '</span>';
@@ -364,6 +365,17 @@ HTML_TEMPLATE = """
                 .then(res => res.json())
                 .then(data => alert(data.message));
         }
+
+        function copyLogs() {
+            const logsBox = document.getElementById('logs-box');
+            const textToCopy = logsBox.innerText;
+            
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                alert("Logs copied to clipboard!");
+            }).catch(err => {
+                alert("Failed to copy logs: " + err);
+            });
+        }
     </script>
 </body>
 </html>
@@ -393,7 +405,6 @@ def start_sniper():
     threads_count = data.get("threads", 10)
     proxies_raw = data.get("proxies", "")
     
-    # Process and sanitize proxies (Auto-strips prefixing http:// and https://)
     raw_list = [line.strip() for line in proxies_raw.split("\n") if line.strip()]
     sniper.proxies = []
     for line in raw_list:
