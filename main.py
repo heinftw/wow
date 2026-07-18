@@ -19,7 +19,7 @@ class TikTokSniper:
         self.rps = 0
         self.last_counter = 0
         self.threads = []
-        self.proxies = []  # Stored in memory now (Cloud compatible!)
+        self.proxies = []  
         self.logs = []
         self.stop_event = threading.Event()
         
@@ -56,7 +56,7 @@ class TikTokSniper:
             "message": message,
             "color": color
         })
-        if len(self.logs) > 100:
+        if len(self.logs) > 60:
             self.logs.pop(0)
 
     def send_telegram(self, username):
@@ -86,7 +86,7 @@ class TikTokSniper:
                     f"https://www.tiktok.com/@{username}", 
                     headers=self.headers, 
                     proxies=proxy, 
-                    timeout=2, 
+                    timeout=3, 
                     allow_redirects=False
                 )
                 
@@ -99,8 +99,14 @@ class TikTokSniper:
                     self.add_log("Taken", f"@{username}", "#FF3B30")
                 
                 self.counter += 1
-            except:
-                time.sleep(0.1)  # Prevent cloud CPU spikes on bad proxy
+            except Exception as e:
+                # Log failures so you can tell if your proxies are dead!
+                err_msg = str(e)
+                if "timeout" in err_msg.lower():
+                    self.add_log("Proxy Timeout", f"Proxy {proxy_str} timed out.", "#FF9F0A")
+                else:
+                    self.add_log("Proxy Error", f"Bad Connection: {proxy_str}", "#FF3B30")
+                time.sleep(0.1)
 
     def rps_calculator(self):
         while not self.stop_event.is_set():
@@ -110,7 +116,7 @@ class TikTokSniper:
 
 sniper = TikTokSniper()
 
-# Cloud-Friendly HTML Dashboard with built-in Proxy input area
+# Fixed Front-End HTML utilizing safe JavaScript parsing
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -258,7 +264,6 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="layout-grid">
-        <!-- Configuration and Control Box -->
         <div class="section-box">
             <h3>Controls</h3>
             
@@ -276,7 +281,7 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="control-group">
-                <label for="proxies">Proxies (Format: user:pass@ip:port or ip:port):</label>
+                <label for="proxies">Proxies (Format: ip:port or user:pass@ip:port):</label>
                 <textarea id="proxies" placeholder="Paste proxies here... (one per line)" style="height: 120px; resize: none;"></textarea>
             </div>
 
@@ -284,7 +289,6 @@ HTML_TEMPLATE = """
             <button onclick="testTelegram()" class="btn" style="background-color: #333; color: #fff;">Test Telegram Connection</button>
         </div>
 
-        <!-- Live Logs Box -->
         <div class="section-box">
             <h3>Live Activity Logs</h3>
             <div class="console-logs" id="logs-box">
@@ -311,7 +315,10 @@ HTML_TEMPLATE = """
                         data.logs.forEach(log => {
                             const item = document.createElement('div');
                             item.className = 'log-item';
-                            item.innerHTML = `<span class="log-time">[\${log.time}]</span> <span style="color: \${log.color}">[\${log.status}]</span> <span>\${log.message}</span>`;
+                            // Safe older JS concatenation avoids flask parsing errors
+                            item.innerHTML = '<span class="log-time">[' + log.time + ']</span> ' +
+                                             '<span style="color: ' + log.color + '">[' + log.status + ']</span> ' +
+                                             '<span>' + log.message + '</span>';
                             logsBox.appendChild(item);
                         });
                         logsBox.scrollTop = logsBox.scrollHeight;
@@ -386,8 +393,16 @@ def start_sniper():
     threads_count = data.get("threads", 10)
     proxies_raw = data.get("proxies", "")
     
-    # Process and save proxies entered into the text box
-    sniper.proxies = [line.strip() for line in proxies_raw.split("\n") if line.strip()]
+    # Process and sanitize proxies (Auto-strips prefixing http:// and https://)
+    raw_list = [line.strip() for line in proxies_raw.split("\n") if line.strip()]
+    sniper.proxies = []
+    for line in raw_list:
+        cleaned = line
+        for prefix in ["http://", "https://"]:
+            if cleaned.lower().startswith(prefix):
+                cleaned = cleaned[len(prefix):]
+        if cleaned:
+            sniper.proxies.append(cleaned)
     
     sniper.checking = True
     sniper.stop_event.clear()
@@ -433,6 +448,5 @@ def test_telegram_route():
         return jsonify({"message": f"Connection failed: {e}"})
 
 if __name__ == "__main__":
-    # Render and other cloud systems bind to environment PORT variables automatically
     port = int(os.environ.get("PORT", 5000))
     app.run(port=port, host="0.0.0.0", debug=False)
