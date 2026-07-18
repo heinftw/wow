@@ -21,7 +21,7 @@ class TikTokSniper:
         self.threads = []
         self.proxies = []  
         self.logs = []
-        self.log_counter = 0  # Unique ID for incremental logs
+        self.log_counter = 0  
         self.stop_event = threading.Event()
         
         # Hardcoded Telegram Credentials
@@ -34,6 +34,9 @@ class TikTokSniper:
             "connection": "keep-alive"
         }
         
+        self.setup_session()
+
+    def setup_session(self):
         self.session = requests.Session()
         adapter = HTTPAdapter(pool_connections=1000, pool_maxsize=1000, max_retries=0)
         self.session.mount('https://', adapter)
@@ -59,7 +62,6 @@ class TikTokSniper:
             "message": message,
             "color": color
         })
-        # Keep internal log cache small to save memory
         if len(self.logs) > 300:
             self.logs.pop(0)
 
@@ -86,7 +88,6 @@ class TikTokSniper:
             proxy = {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"} if proxy_str else None
 
             try:
-                # Dropped timeout to 2 seconds to drop slow proxies instantly and boost speed
                 r = self.session.get(
                     f"https://www.tiktok.com/@{username}", 
                     headers=self.headers, 
@@ -105,12 +106,15 @@ class TikTokSniper:
                 
                 self.counter += 1
             except Exception as e:
+                # Do not spam logs with errors if we actively stopped the script
+                if self.stop_event.is_set():
+                    break
+                
                 err_msg = str(e)
                 if "timeout" in err_msg.lower():
                     self.add_log("Proxy Timeout", f"Proxy {proxy_str} timed out.", "#FF9F0A")
                 else:
                     self.add_log("Proxy Error", f"Bad Connection: {proxy_str}", "#FF3B30")
-                # Drop delay to keep threads cycling fast
                 time.sleep(0.05)
 
     def rps_calculator(self):
@@ -121,7 +125,7 @@ class TikTokSniper:
 
 sniper = TikTokSniper()
 
-# Highly optimized HTML with Smooth Streaming JS
+# HTML Dashboard Template
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -287,7 +291,7 @@ HTML_TEMPLATE = """
 
             <div class="control-group">
                 <label for="proxies">Proxies (Format: ip:port or user:pass@ip:port):</label>
-                <textarea id="proxies" placeholder="Paste proxies here... (one per line)" style="height: 120px; resize: none;"></textarea>
+                <textarea id="proxies" placeholder="Leave empty for NO PROXIES (Not Recommended)..." style="height: 120px; resize: none;"></textarea>
             </div>
 
             <button id="action-btn" class="btn" onclick="toggleSniper()">START SNIPING</button>
@@ -305,19 +309,18 @@ HTML_TEMPLATE = """
 
     <script>
         let running = false;
-        let lastLogId = 0; // Tracks the last log we loaded to stream incrementally
+        let lastLogId = 0;
 
         function updateStats() {
             fetch('/stats?last_id=' + lastLogId)
                 .then(res => res.json())
                 .then(data => {
-                    // Update stats counters
                     document.getElementById('stat-avail').innerText = data.available;
                     document.getElementById('stat-checked').innerText = data.counter;
                     document.getElementById('stat-rps').innerText = data.rps;
                     document.getElementById('stat-proxies').innerText = data.proxies_count;
 
-                    // Sync the button state directly with the backend status to fix the UI freeze bug!
+                    // Sync interface button status smoothly
                     const btn = document.getElementById('action-btn');
                     if (data.checking) {
                         running = true;
@@ -329,10 +332,8 @@ HTML_TEMPLATE = """
                         btn.className = "btn";
                     }
 
-                    // Dynamically stream logs
                     const logsBox = document.getElementById('logs-box');
                     if (data.logs.length > 0) {
-                        // If logs box currently contains the system boot text, clear it
                         if (logsBox.innerText.includes("System ready")) {
                             logsBox.innerHTML = '';
                         }
@@ -344,21 +345,18 @@ HTML_TEMPLATE = """
                                              '<span style="color: ' + log.color + '">[' + log.status + ']</span> ' +
                                              '<span>' + log.message + '</span>';
                             logsBox.appendChild(item);
-                            lastLogId = log.id; // Update our tracker to the absolute newest ID
+                            lastLogId = log.id;
                         });
 
-                        // Prune elements to keep DOM memory incredibly light and lag-free
                         while (logsBox.children.length > 150) {
                             logsBox.removeChild(logsBox.firstChild);
                         }
 
-                        // Instant autoscroll
                         logsBox.scrollTop = logsBox.scrollHeight;
                     }
                 });
         }
 
-        // Fast update loop: requests data 4 times a second (250ms) for high-speed live streams!
         setInterval(updateStats, 250);
 
         function toggleSniper() {
@@ -368,7 +366,6 @@ HTML_TEMPLATE = """
             const proxiesRaw = document.getElementById('proxies').value;
 
             if (!running) {
-                // Instantly update button while the server configures itself in background
                 btn.innerText = "STARTING...";
                 btn.className = "btn stop";
                 
@@ -393,12 +390,8 @@ HTML_TEMPLATE = """
 
         function copyLogs() {
             const logsBox = document.getElementById('logs-box');
-            const textToCopy = logsBox.innerText;
-            
-            navigator.clipboard.writeText(textToCopy).then(() => {
+            navigator.clipboard.writeText(logsBox.innerText).then(() => {
                 alert("Logs copied to clipboard!");
-            }).catch(err => {
-                alert("Failed to copy logs: " + err);
             });
         }
     </script>
@@ -412,19 +405,15 @@ def home():
 
 @app.route('/stats', methods=['GET'])
 def get_stats():
-    # Read the last ID the client saw
     last_id = int(request.args.get('last_id', 0))
-    
-    # Filter only newer logs
     new_logs = [log for log in sniper.logs if log['id'] > last_id]
-    
     return jsonify({
         "checking": sniper.checking,
         "available": sniper.available,
         "counter": sniper.counter,
         "rps": sniper.rps,
         "proxies_count": len(sniper.proxies),
-        "logs": new_logs # Send ONLY new logs
+        "logs": new_logs
     })
 
 @app.route('/start', methods=['POST'])
@@ -437,7 +426,7 @@ def start_sniper():
     threads_count = data.get("threads", 10)
     proxies_raw = data.get("proxies", "")
     
-    # Clean up proxies input instantly
+    # Process incoming proxies
     raw_list = [line.strip() for line in proxies_raw.split("\n") if line.strip()]
     sniper.proxies = []
     for line in raw_list:
@@ -451,10 +440,8 @@ def start_sniper():
     sniper.checking = True
     sniper.stop_event.clear()
     
-    # Run calculating thread
     threading.Thread(target=sniper.rps_calculator, daemon=True).start()
     
-    # Spin up threads inside a single background manager to prevent HTTP blocking!
     def thread_launcher():
         for _ in range(threads_count):
             if sniper.stop_event.is_set():
@@ -472,8 +459,19 @@ def start_sniper():
 def stop_sniper():
     sniper.checking = False
     sniper.stop_event.set()
+    
+    # CRITICAL FIX: Kill all connection sockets instantly.
+    # This immediately breaks all frozen thread connections and shuts them down.
+    try:
+        sniper.session.close()
+    except:
+        pass
+    
+    # Rebuild connection pool for next run
+    sniper.setup_session()
+    
     sniper.threads.clear()
-    sniper.add_log("System", "Sniper process stopped.", "#FF3B30")
+    sniper.add_log("System", "Sniper process stopped instantly.", "#FF3B30")
     return jsonify({"status": "stopped"})
 
 @app.route('/test-telegram', methods=['POST'])
