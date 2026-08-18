@@ -1,0 +1,676 @@
+local plrs, ws, lighting, ts, uis, vim, rs = game:GetService("Players"), workspace, game:GetService("Lighting"), game:GetService("TweenService"), game:GetService("UserInputService"), game:GetService("VirtualInputManager"), game:GetService("RunService")
+local sg = game:GetService("StarterGui")
+local lp, cam = plrs.LocalPlayer, ws.CurrentCamera
+
+if not (type(hookmetamethod) == "function" and (type(Drawing) == "table" or type(Drawing) == "userdata")) then
+    lp:Kick("no suported")
+    return
+end
+
+local function getRandomStr()
+    local chars, str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", ""
+    for _ = 1, math.random(6, 13) do
+        local idx = math.random(1, #chars)
+        str ..= string.sub(chars, idx, idx)
+    end
+    return str
+end
+
+local testAttr = getRandomStr()
+lp:SetAttribute(testAttr, true)
+task.wait(0.1)
+if lp:GetAttribute(testAttr) == nil then
+    lp:Kick("?????????????????????????????????")
+    return
+end
+lp:SetAttribute(testAttr, nil)
+
+local rm = getrawmetatable(game)
+local oldNamecall = rm.__namecall
+pcall(function()
+    hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...) return oldFireServer(self, ...) end)
+    setreadonly(rm, false)
+    rm.__namecall = newcclosure(function(self, ...)
+        if getnamecallmethod() == "FireServer" and (...) == "cframe_modified" then return nil end
+        return oldNamecall(self, ...)
+    end)
+    setreadonly(rm, true)
+    sg:SetCore("DevConsoleVisible", false)
+    uis.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.F9 then sg:SetCore("DevConsoleVisible", false) end
+    end)
+end)
+
+local lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/xxx14445551x/test-ui/refs/heads/main/1111"))()
+local spawnTimes, conns, tracers = {}, {}, {}
+local targetPlayer, targetSilent
+
+for _, p in ipairs(plrs:GetPlayers()) do spawnTimes[p] = os.clock() end
+plrs.PlayerAdded:Connect(function(p)
+    spawnTimes[p] = os.clock()
+    p.CharacterAdded:Connect(function() spawnTimes[p] = os.clock() end)
+end)
+
+local cfg = {
+    speed = false, speedVal = 0.25, fly = false, flySpeed = 0.25, noclip = false,
+    fov = false, fovVal = 80, esp = false, espW = 2000, espH = 0.7,
+    ambient = false, ambientCol = Color3.new(0, 0, 0),
+    localChams = false, localChamsCol = Color3.new(0, 0, 0), localChamsTrans = 0.8,
+    bright = false, brightVal = 1, silent = false, silentCol = Color3.new(1, 1, 1),
+    silentThick = 1, silentCfg = { fov = 120, hitbox = "Head", showFov = false },
+    chams = false, chamsCol = Color3.new(1, 0, 0), tracer = false,
+    tracerColor = Color3.fromRGB(0, 255, 50), tracerThickness = 1.4,
+    jumpEffect = false, jumpEffectColor = Color3.fromRGB(135, 206, 250),
+    farming = false, namesOn = false
+}
+
+local keys = { w = false, a = false, s = false, d = false, space = false, shift = false }
+
+local function createNameTag(chr, name, offset, text)
+    if not chr or chr == lp.Character or chr:FindFirstChild(name) then return end
+    local hrp = chr:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local gui = Instance.new("BillboardGui")
+    gui.Name, gui.Size, gui.StudsOffset, gui.AlwaysOnTop, gui.Parent = name, UDim2.new(0, 60, 0, 12), offset, true, hrp
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size, lbl.BackgroundTransparency, lbl.Text = UDim2.new(1, 0, 1, 0), 1, text or ""
+    lbl.TextColor3, lbl.TextStrokeTransparency, lbl.Font, lbl.TextSize = Color3.fromRGB(255, 255, 255), 0, Enum.Font.GothamBold, 12
+    lbl.Parent = gui
+    return lbl
+end
+
+local function removeNameTag(chr, name)
+    if chr and chr:FindFirstChild("HumanoidRootPart") then
+        local tag = chr.HumanoidRootPart:FindFirstChild(name)
+        if tag then tag:Destroy() end
+    end
+end
+
+local function updateNameTags()
+    if cfg.namesOn then
+        local function setupPlayerTag(p)
+            if p == lp then return end
+            p.CharacterAdded:Connect(function(c)
+                task.wait(0.5)
+                if cfg.namesOn then createNameTag(c, "NameTag", Vector3.new(0, 2.5, 0), p.Name) end
+            end)
+            if p.Character then createNameTag(p.Character, "NameTag", Vector3.new(0, 2.5, 0), p.Name) end
+        end
+        for _, p in ipairs(plrs:GetPlayers()) do setupPlayerTag(p) end
+        plrs.PlayerAdded:Connect(setupPlayerTag)
+    else
+        for _, p in ipairs(plrs:GetPlayers()) do removeNameTag(p.Character, "NameTag") end
+    end
+end
+
+local function getValidFarmTargets()
+    local valid = {}
+    for _, p in ipairs(plrs:GetPlayers()) do
+        if p ~= lp and p.Character then
+            local hum, hrp = p.Character:FindFirstChildOfClass("Humanoid"), p.Character:FindFirstChild("HumanoidRootPart")
+            local spawnTime = spawnTimes[p] or 0
+            if hum and hum.Health > 0 and hrp and (os.clock() - spawnTime >= 1.5) then
+                table.insert(valid, p)
+            end
+        end
+    end
+    return valid
+end
+
+local function hasTool(p, name)
+    if not p.Character then return false end
+    if p.Character:FindFirstChild(name) then return true end
+    local bp = p:FindFirstChild("Backpack")
+    return bp and bp:FindFirstChild(name) ~= nil
+end
+
+local function getMovers(part)
+    local posAlign, rotAlign = part:FindFirstChild("PositionAlign"), part:FindFirstChild("RotationAlign")
+    if not posAlign then
+        local att = Instance.new("Attachment", part)
+        att.Name = "MoverAttachment"
+
+        posAlign = Instance.new("AlignPosition", part)
+        posAlign.Name, posAlign.Mode, posAlign.MaxForce, posAlign.MaxVelocity, posAlign.Responsiveness, posAlign.Attachment0 = "PositionAlign", Enum.PositionAlignmentMode.OneAttachment, 999999999, math.huge, 100000, att
+
+        rotAlign = Instance.new("AlignOrientation", part)
+        rotAlign.Name, rotAlign.MaxTorque, rotAlign.Responsiveness, rotAlign.Attachment0, rotAlign.Mode = "RotationAlign", 1000000000, 100000, att, Enum.OrientationAlignmentMode.OneAttachment
+    end
+    return posAlign, rotAlign
+end
+
+local function speedupKnife(chr)
+    local knife = chr:FindFirstChild("Knife")
+    if knife and knife:FindFirstChild("KnifeServer") and knife.KnifeServer:FindFirstChild("KnifeClient") then
+        local env = getsenv(knife.KnifeServer.KnifeClient)
+        if env and env.ClientKnifeSettings then
+            env.ClientKnifeSettings.EquipTime = 0.001
+            env.ClientKnifeSettings.SlashTime = 0.001
+        end
+    end
+end
+
+local function equipKnife(chr)
+    local bp = lp:FindFirstChild("Backpack")
+    if bp then
+        local knife = bp:FindFirstChild("Knife")
+        if knife then
+            knife.Parent = chr
+            speedupKnife(chr)
+        end
+    end
+end
+
+local function pressE()
+    task.spawn(function()
+        vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        task.wait(0.01)
+        vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+    end)
+end
+
+local function startFarm()
+    if conns.farm then conns.farm:Disconnect() end
+    local lastTargetTime, targetTimeout, lastPressTime, pressInterval = 0, 0.2, 0, 0.05
+
+    local function findPriorityTarget()
+        local m, s
+        for _, p in ipairs(getValidFarmTargets()) do
+            if hasTool(p, "Knife") then m = p
+            elseif hasTool(p, "Revolver") then s = p end
+        end
+        return m or s
+    end
+
+    conns.farm = rs.Heartbeat:Connect(function()
+        if not cfg.farming or not lp.Character then return end
+        local chr = lp.Character
+        local hrp = chr:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        for _, v in pairs(chr:GetDescendants()) do
+            if v:IsA("BasePart") then v.CanCollide = false end
+        end
+
+        equipKnife(chr)
+        local posAlign, rotAlign = getMovers(hrp)
+        local targets = getValidFarmTargets()
+
+        local invalidTarget = not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local priorityTarget = findPriorityTarget()
+
+        if priorityTarget then
+            targetPlayer, lastTargetTime = priorityTarget, os.clock()
+        elseif invalidTarget or (os.clock() - lastTargetTime >= targetTimeout) then
+            targetPlayer = #targets > 0 and targets[math.random(1, #targets)] or nil
+            lastTargetTime = os.clock()
+        end
+
+        local tHrp = targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if tHrp then
+            posAlign.Position = tHrp.Position + Vector3.new(0, -0.5, 0)
+            rotAlign.CFrame = CFrame.lookAt(hrp.Position, tHrp.Position)
+            if os.clock() - lastPressTime >= pressInterval then
+                pressE()
+                lastPressTime = os.clock()
+            end
+        end
+    end)
+
+    if conns.knifeUpdater then conns.knifeUpdater:Disconnect() end
+    conns.knifeUpdater = rs.Heartbeat:Connect(function()
+        if cfg.farming and lp.Character then speedupKnife(lp.Character) end
+    end)
+
+    lp.CharacterAdded:Connect(function(c)
+        task.wait(0.1)
+        equipKnife(c)
+    end)
+end
+
+local function toggleFarm(state)
+    cfg.farming = state
+    if state then
+        startFarm()
+    else
+        if conns.farm then conns.farm:Disconnect(); conns.farm = nil end
+        if conns.knifeUpdater then conns.knifeUpdater:Disconnect(); conns.knifeUpdater = nil end
+        if lp.Character and lp.Character:FindFirstChild("Humanoid") then lp.Character.Humanoid.Health = 0 end
+    end
+end
+
+local function createJumpEffect(pos)
+    local part = Instance.new("Part")
+    part.Anchored, part.CanCollide, part.Transparency, part.Color, part.Size = true, false, 0.3, cfg.jumpEffectColor, Vector3.new(1, 1, 1)
+    part.Material, part.CFrame = Enum.Material.Neon, CFrame.new(pos)
+
+    local mesh = Instance.new("SpecialMesh", part)
+    mesh.MeshType, mesh.MeshId, mesh.Scale = Enum.MeshType.FileMesh, "rbxassetid://12640007832", Vector3.new(0.1, 0.1, 0.1)
+    part.Parent = ws
+
+    local t1 = ts:Create(mesh, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = Vector3.new(1.5, 1.5, 1.5) })
+    local t2 = ts:Create(part, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Transparency = 1 })
+
+    t1:Play()
+    t1.Completed:Connect(function()
+        t2:Play()
+        t2.Completed:Connect(function() part:Destroy() end)
+    end)
+end
+
+local function hookJumpEffect(chr)
+    if not chr then return end
+    local hum, hrp = chr:WaitForChild("Humanoid"), chr:WaitForChild("HumanoidRootPart")
+    hum.StateChanged:Connect(function(_, newState)
+        if newState == Enum.HumanoidStateType.Jumping and cfg.jumpEffect then
+            createJumpEffect(hrp.Position - Vector3.new(0, 2.6, 0))
+        end
+    end)
+end
+
+lp.CharacterAdded:Connect(hookJumpEffect)
+if lp.Character then hookJumpEffect(lp.Character) end
+
+local function updateLocalChams(chr)
+    if not chr then return end
+    local existing = chr:FindFirstChild("localChams")
+    if existing then existing:Destroy() end
+
+    if cfg.localChams then
+        local hl = Instance.new("Highlight")
+        hl.Name, hl.OutlineColor, hl.FillColor, hl.FillTransparency, hl.DepthMode = "localChams", cfg.localChamsCol, cfg.localChamsCol, cfg.localChamsTrans, Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = chr
+    end
+end
+
+lp.CharacterAdded:Connect(function(c)
+    updateLocalChams(c)
+    c:WaitForChild("Humanoid").Died:Connect(function()
+        local hl = c:FindFirstChild("localChams")
+        if hl then hl:Destroy() end
+    end)
+end)
+if lp.Character then updateLocalChams(lp.Character) end
+
+local function createEspBox(p)
+    local sq = Drawing.new("Square")
+    sq.Visible, sq.Transparency, sq.Filled, sq.Color, sq.Thickness = false, 1, false, p.TeamColor.Color, 1
+
+    rs.RenderStepped:Connect(function()
+        if cfg.esp and p.Character and p.Character:FindFirstChild("Humanoid") and p.Character:FindFirstChild("HumanoidRootPart") and p ~= lp and p.Character.Humanoid.Health > 0 then
+            local hrp, head = p.Character.HumanoidRootPart, p.Character.Head
+            local hrpPos, vis1 = cam:worldToViewportPoint(hrp.Position)
+            local headPos = cam:worldToViewportPoint(head.Position + Vector3.new(0, 2, 0))
+            local feetPos = cam:worldToViewportPoint(hrp.Position - Vector3.new(0, 0.5, 0))
+
+            sq.Size = Vector2.new(cfg.espW / hrpPos.Z, (headPos.Y - feetPos.Y) * cfg.espH)
+            sq.Position = Vector2.new(hrpPos.X - (sq.Size.X / 2), hrpPos.Y - (sq.Size.Y / 2))
+            sq.Visible = vis1
+        else
+            sq.Visible = false
+        end
+    end)
+end
+
+for _, p in pairs(plrs:GetPlayers()) do if p ~= lp then createEspBox(p) end end
+plrs.PlayerAdded:Connect(function(p) createEspBox(p) end)
+
+task.spawn(function()
+    while task.wait() do
+        if cfg.fov then cam.FieldOfView = cfg.fovVal end
+        lighting.Ambient = cfg.ambient and cfg.ambientCol or Color3.new(0.15, 0.15, 0.15)
+        lighting.Brightness = cfg.bright and cfg.brightVal or 1
+    end
+end)
+
+local speedConn
+local function updateSpeed()
+    if speedConn then speedConn:Disconnect() end
+    if cfg.speed then
+        speedConn = rs.Heartbeat:Connect(function()
+            if lp.Character then
+                local hrp, hum = lp.Character:FindFirstChild("HumanoidRootPart"), lp.Character:FindFirstChildOfClass("Humanoid")
+                if hrp and hum and hum.MoveDirection.Magnitude > 0 then
+                    hrp.CFrame += (hum.MoveDirection * cfg.speedVal)
+                end
+            end
+        end)
+    end
+end
+
+local function updateFly()
+    if not cfg.fly or not lp.Character then return end
+    local hrp = lp.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local dir = Vector3.zero
+    if keys.w then dir += cam.CFrame.LookVector end
+    if keys.s then dir -= cam.CFrame.LookVector end
+    if keys.a then dir -= cam.CFrame.RightVector end
+    if keys.d then dir += cam.CFrame.RightVector end
+    if keys.space then dir += Vector3.new(0, 1, 0) end
+    if keys.shift then dir -= Vector3.new(0, 1, 0) end
+
+    if dir.Magnitude > 0 then
+        dir = dir.Unit * cfg.flySpeed
+        hrp.CFrame += dir
+    end
+    hrp.Velocity = Vector3.new(hrp.Velocity.X, 0, hrp.Velocity.Z)
+end
+
+uis.InputBegan:Connect(function(input)
+    if cfg.fly then
+        local k = input.KeyCode
+        if k == Enum.KeyCode.W then keys.w = true
+        elseif k == Enum.KeyCode.A then keys.a = true
+        elseif k == Enum.KeyCode.S then keys.s = true
+        elseif k == Enum.KeyCode.D then keys.d = true
+        elseif k == Enum.KeyCode.Space then keys.space = true
+        elseif k == Enum.KeyCode.LeftShift then keys.shift = true end
+    end
+end)
+
+uis.InputEnded:Connect(function(input)
+    local k = input.KeyCode
+    if k == Enum.KeyCode.W then keys.w = false
+    elseif k == Enum.KeyCode.A then keys.a = false
+    elseif k == Enum.KeyCode.S then keys.s = false
+    elseif k == Enum.KeyCode.D then keys.d = false
+    elseif k == Enum.KeyCode.Space then keys.space = false
+    elseif k == Enum.KeyCode.LeftShift then keys.shift = false end
+end)
+
+rs.Heartbeat:Connect(function()
+    if cfg.noclip and lp.Character then
+        for _, p in pairs(lp.Character:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
+    if cfg.fly then updateFly() end
+end)
+
+local function addChams(chr)
+    if not cfg.chams or not chr or chr == lp.Character then return end
+    local existing = chr:FindFirstChild("playerChams")
+    if existing then existing:Destroy() end
+
+    local hl = Instance.new("Highlight")
+    hl.Name, hl.OutlineTransparency, hl.FillTransparency, hl.FillColor, hl.DepthMode, hl.Parent = "playerChams", 1, 0.3, cfg.chamsCol, Enum.HighlightDepthMode.AlwaysOnTop, chr
+end
+
+local function removeChams(chr)
+    if chr and chr:FindFirstChild("playerChams") then chr.playerChams:Destroy() end
+end
+
+for _, p in ipairs(plrs:GetPlayers()) do
+    if p ~= lp then
+        p.CharacterAdded:Connect(function(c)
+            task.wait(0.5)
+            if cfg.chams then addChams(c) end
+        end)
+        p.CharacterRemoving:Connect(removeChams)
+    end
+end
+
+plrs.PlayerAdded:Connect(function(p)
+    p.CharacterAdded:Connect(function(c)
+        task.wait(0.5)
+        if cfg.chams then addChams(c) end
+    end)
+end)
+
+lib:Notification2({ Title = "discord.gg/Gc5QkQCdFA", Duration = 10 })
+
+local win = lib:Window({
+    Name = "Nigalose last version", Enabled = true,
+    Color = Color3.new(1, 1, 1), Size = UDim2.new(0, 400, 0, 380),
+    Position = UDim2.new(0.5, -248, 0.5, -248)
+})
+
+task.spawn(function()
+    while task.wait(5) do
+        for _, v in pairs(game:GetService("CoreGui"):GetDescendants()) do
+            if v:IsA("TextLabel") and v.Name == "Version" then v.Text = "" end
+        end
+    end
+end)
+
+local tCombat, tVisual, tMisc = win:Tab({ Name = "Combat" }), win:Tab({ Name = "Visual" }), win:Tab({ Name = "Misc" })
+
+local sChams = tVisual:Section({ Name = "Chams", Side = "Left" })
+local sEspBox = tVisual:Section({ Name = "EspBox", Side = "Left" })
+local sFovChanger = tVisual:Section({ Name = "FovChanger", Side = "Right" })
+local sAtmosphere = tVisual:Section({ Name = "Atmosphere", Side = "Right" })
+local sBrightness = tVisual:Section({ Name = "Brightness", Side = "Right" })
+local sChamsLocal = tVisual:Section({ Name = "ChamsLocalPlayer", Side = "Right" })
+
+local sSpeed = tMisc:Section({ Name = "SpeedHack", Side = "Left" })
+local sFly = tMisc:Section({ Name = "Fly", Side = "Left" })
+local sNoclip = tMisc:Section({ Name = "Noclip", Side = "Left" })
+local sAutoFarm = tMisc:Section({ Name = "AutoFarm", Side = "Right" })
+
+local sSilent = tCombat:Section({ Name = "SilentAim", Side = "Left" })
+local sTracers = tVisual:Section({ Name = "Tracers", Side = "Left" })
+local sJumpCircle = tVisual:Section({ Name = "JumpCircle", Side = "Right" })
+local sNameTags = tVisual:Section({ Name = "NameTags", Side = "Left" })
+
+sSilent:Toggle({ Name = "Enabled", Flag = "SilentAim", Value = false, Callback = function(v) cfg.silent = v end })
+sSilent:Dropdown({
+    Name = "Hitbox", Flag = "SilentHitbox",
+    List = {
+        { Name = "Head", Mode = "Button", Value = true, Callback = function() cfg.silentCfg.hitbox = "Head" end },
+        { Name = "Torso", Mode = "Button", Callback = function() cfg.silentCfg.hitbox = "Torso" end },
+        { Name = "HumanoidRootPart", Mode = "Button", Callback = function() cfg.silentCfg.hitbox = "HumanoidRootPart" end },
+        { Name = "Left Arm", Mode = "Button", Callback = function() cfg.silentCfg.hitbox = "Left Arm" end },
+        { Name = "Left Leg", Mode = "Button", Callback = function() cfg.silentCfg.hitbox = "Left Leg" end },
+        { Name = "Right Arm", Mode = "Button", Callback = function() cfg.silentCfg.hitbox = "Right Arm" end },
+        { Name = "Right Leg", Mode = "Button", Callback = function() cfg.silentCfg.hitbox = "Right Leg" end }
+    }
+})
+
+sSilent:Toggle({ Name = "ShowFov", Flag = "ShowFov", Value = false, Callback = function(v) cfg.silentCfg.showFov = v end })
+sSilent:Slider({ Name = "FOV", Flag = "SilentAimFOV", Min = 0, Max = 320, Value = 120, Precise = 1, Callback = function(v) cfg.silentCfg.fov = v end })
+sSilent:Slider({ Name = "FovThickness", Flag = "FovThickness", Min = 1, Max = 15, Value = 1, Precise = 1, Callback = function(v) cfg.silentThick = v end })
+sSilent:Colorpicker({ Name = "FovColor", Flag = "FovColorSallo", Side = "Left", Value = { 1, 1, 1, 0, false }, Callback = function(_, col) cfg.silentCol = col end })
+
+sChams:Toggle({
+    Name = "Enabled", Flag = "Chams123", Value = false,
+    Callback = function(v)
+        cfg.chams = v
+        for _, p in ipairs(plrs:GetPlayers()) do
+            if p ~= lp and p.Character then
+                if v then addChams(p.Character) else removeChams(p.Character) end
+            end
+        end
+    end
+})
+
+sChams:Colorpicker({
+    Name = "Color", Flag = "ChamsAllColor", Side = "Left", Value = { 1, 0, 0, 0, false },
+    Callback = function(_, col)
+        cfg.chamsCol = col
+        if cfg.chams then
+            for _, p in ipairs(plrs:GetPlayers()) do
+                if p ~= lp and p.Character and p.Character:FindFirstChild("playerChams") then
+                    p.Character.playerChams.FillColor = col
+                end
+            end
+        end
+    end
+})
+
+sEspBox:Toggle({ Name = "Enabled", Flag = "EspBox", Value = false, Callback = function(v) cfg.esp = v end })
+sEspBox:Slider({ Name = "Box Width", Flag = "box1", Side = "Left", Min = 5, Max = 30, Value = 20, Precise = 1, Callback = function(v) cfg.espW = v * 100 end })
+sEspBox:Slider({ Name = "Box Height", Flag = "box2", Side = "Left", Min = 0, Max = 2, Value = 0.7, Precise = 1, Callback = function(v) cfg.espH = v end })
+
+sTracers:Toggle({ Name = "Enabled", Flag = "Tracers", Value = false, Callback = function(v) cfg.tracer = v end })
+sTracers:Colorpicker({ Name = "Color", Flag = "TracerColor", Side = "Left", Value = { 0, 1, 0, 0, false }, Callback = function(_, col) cfg.tracerColor = col end })
+sTracers:Slider({ Name = "Thickness", Flag = "TracerThickness", Side = "Left", Min = 1, Max = 5, Value = 1.4, Precise = 1, Callback = function(v) cfg.tracerThickness = v end })
+
+sFovChanger:Toggle({
+    Name = "Enabled", Flag = "fov", Value = false,
+    Callback = function(v)
+        cfg.fov = v
+        if not v then cam.FieldOfView = 70 end
+    end
+})
+sFovChanger:Slider({
+    Name = "Fov Value", Flag = "fovchanger", Side = "Right", Min = 60, Max = 120, Value = 80, Precise = 1,
+    Callback = function(v)
+        cfg.fovVal = v
+        if cfg.fov then cam.FieldOfView = v end
+    end
+})
+
+sAtmosphere:Toggle({ Name = "Enabled", Flag = "Atmosphere", Value = false, Callback = function(v) cfg.ambient = v end })
+sAtmosphere:Colorpicker({ Name = "Color", Flag = "AtmosphereColor", Side = "Left", Value = { 1, 1, 1, 0, false }, Callback = function(_, col) cfg.ambientCol = col end })
+
+sBrightness:Toggle({ Name = "Enabled", Flag = "Brightness1", Value = false, Callback = function(v) cfg.bright = v end })
+sBrightness:Slider({ Name = "Value", Flag = "BrightnessValue", Side = "Left", Min = 0, Max = 10, Value = 1, Precise = 1, Callback = function(v) cfg.brightVal = v end })
+
+sChamsLocal:Toggle({ Name = "Enabled", Flag = "Chams", Value = false, Callback = function(v) cfg.localChams = v; updateLocalChams(lp.Character) end })
+sChamsLocal:Colorpicker({ Name = "Color", Flag = "ChamsColor", Side = "Left", Value = { 0, 1, 0, 0, false }, Callback = function(_, col) cfg.localChamsCol = col; updateLocalChams(lp.Character) end })
+sChamsLocal:Slider({ Name = "Transparency", Flag = "ChamsTransparency", Side = "Left", Min = 0, Max = 1, Value = 0.8, Precise = 1, Callback = function(v) cfg.localChamsTrans = v; updateLocalChams(lp.Character) end })
+
+sNameTags:Toggle({ Name = "Enabled", Flag = "NameTags", Value = false, Callback = function(v) cfg.namesOn = v; updateNameTags() end })
+
+sJumpCircle:Toggle({ Name = "Enabled", Flag = "JumpEffect", Value = false, Callback = function(v) cfg.jumpEffect = v end })
+sJumpCircle:Colorpicker({ Name = "Color", Flag = "JumpEffectColor", Side = "Left", Value = { 0.5, 0.8, 1, 0, false }, Callback = function(_, col) cfg.jumpEffectColor = col end })
+
+local togSpeed = sSpeed:Toggle({ Name = "Enabled", Flag = "speedhack", Value = false, Callback = function(v) cfg.speed = v; updateSpeed() end })
+togSpeed:Keybind({ Flag = "SpeedFlag", Value = "", DoNotClear = true, Callback = function(_, pressed) if pressed then pcall(function() togSpeed:Set(not togSpeed.Value) end) end end })
+sSpeed:Slider({ Name = "Speed", Flag = "speedvalue", Side = "Left", Min = 0, Max = 3, Value = 0.25, Precise = 1, Callback = function(v) cfg.speedVal = v; updateSpeed() end })
+
+local togFly = sFly:Toggle({ Name = "Enabled", Flag = "flyhack", Value = false, Callback = function(v) cfg.fly = v end })
+togFly:Keybind({ Flag = "flyFlag", Value = "", DoNotClear = true, Callback = function(_, pressed) if pressed then pcall(function() togFly:Set(not togFly.Value) end) end end })
+sFly:Slider({ Name = "Speed", Flag = "flyspeed", Side = "Left", Min = 0, Max = 3, Value = 0.25, Precise = 1, Callback = function(v) cfg.flySpeed = v end })
+
+local togNoclip = sNoclip:Toggle({ Name = "Enabled", Flag = "Noclip", Value = false, Callback = function(v) cfg.noclip = v end })
+togNoclip:Keybind({ Flag = "NoclipFlag", Value = "", DoNotClear = true, Callback = function(_, pressed) if pressed then pcall(function() togNoclip:Set(not togNoclip.Value) end) end end })
+
+sAutoFarm:Toggle({ Name = "Enabled", Flag = "AutoFarm", Value = false, Callback = function(v) toggleFarm(v) end })
+
+local function createTracerLine()
+    local line = Drawing.new("Line")
+    line.Visible, line.Color, line.Thickness = false, cfg.tracerColor, cfg.tracerThickness
+    return line
+end
+
+local function updateTracer(p, line)
+    if not cfg.tracer or not p.Character then line.Visible = false; return end
+    local hum, hrp = p.Character:FindFirstChild("Humanoid"), p.Character:FindFirstChild("HumanoidRootPart")
+    if not hum or not hrp or hum.Health <= 0 then line.Visible = false; return end
+
+    local pos, vis = cam:WorldToViewportPoint(hrp.Position)
+    if not vis then line.Visible = false; return end
+
+    line.From = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+    line.To = Vector2.new(pos.X, pos.Y)
+    line.Visible, line.Color, line.Thickness = true, cfg.tracerColor, cfg.tracerThickness
+end
+
+local function setupTracer(p)
+    if p == lp then return end
+    local line = createTracerLine()
+    tracers[p] = line
+
+    local conn = rs.RenderStepped:Connect(function() updateTracer(p, line) end)
+    p.AncestryChanged:Connect(function()
+        if not p.Parent then
+            conn:Disconnect()
+            line:Remove()
+            tracers[p] = nil
+        end
+    end)
+    p.CharacterAdded:Connect(function() updateTracer(p, line) end)
+end
+
+for _, p in ipairs(plrs:GetPlayers()) do if p ~= lp then setupTracer(p) end end
+plrs.PlayerAdded:Connect(function(p) if p ~= lp then setupTracer(p) end end)
+plrs.PlayerRemoving:Connect(function(p)
+    local line = tracers[p]
+    if line then line:Remove(); tracers[p] = nil end
+end)
+
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible, fovCircle.Thickness, fovCircle.Color, fovCircle.ZIndex = cfg.silentCfg.showFov, 2, cfg.silentCol, 2
+
+local function getSilentTarget(maxFov)
+    local target, closest = nil, maxFov or math.huge
+    for _, p in pairs(plrs:GetPlayers()) do
+        if p ~= lp and p.Character and p.Character:FindFirstChild(cfg.silentCfg.hitbox) then
+            local pos, vis = cam:WorldToScreenPoint(p.Character[cfg.silentCfg.hitbox].Position)
+            local mousePos = lp:GetMouse()
+            local dist = (Vector2.new(pos.X, pos.Y) - Vector2.new(mousePos.X, mousePos.Y)).Magnitude
+            if dist < closest and vis then
+                closest, target = dist, p
+            end
+        end
+    end
+    return target
+end
+
+rs.Stepped:Connect(function()
+    fovCircle.Visible = cfg.silentCfg.showFov
+    if cfg.silentCfg.showFov then
+        local mousePos = lp:GetMouse()
+        fovCircle.Radius = cfg.silentCfg.fov
+        fovCircle.Position = Vector2.new(mousePos.X, mousePos.Y + 36)
+        fovCircle.Thickness = cfg.silentThick
+        fovCircle.Color = cfg.silentCol
+    end
+    targetSilent = getSilentTarget(cfg.silentCfg.fov)
+end)
+
+local oldNc
+oldNc = hookmetamethod(game, "__namecall", function(self, ...)
+    local args = { ... }
+    if not checkcaller() and getnamecallmethod() == "FindPartOnRayWithIgnoreList" then
+        if table.find(args[2], ws.WorldIgnore.Ignore) and targetSilent and targetSilent.Character and cfg.silent then
+            pcall(function()
+                local origin = args[1].Origin
+                args[1] = Ray.new(origin, targetSilent.Character[cfg.silentCfg.hitbox].Position - origin)
+            end)
+        end
+    end
+    return oldNc(self, unpack(args))
+end)
+
+local tOpt = win:Tab({ Name = "Options" })
+local sMenu = tOpt:Section({ Name = "Menu", Side = "Left" })
+local togUI = sMenu:Toggle({ Name = "ui", Flag = "UI/Enabled", IgnoreFlag = true, Value = win.Enabled, Callback = function(v) win.Enabled = v end })
+togUI:Keybind({ Value = "RightControl", Flag = "UI/Keybind", DoNotClear = true })
+sMenu:Toggle({ Name = "open on load", Flag = "UI/OOL", Value = true })
+tOpt:AddConfigSection("Nig", "Left")
+
+local sBg = tOpt:Section({ Name = "Background", Side = "Right" })
+sBg:Colorpicker({
+    Name = "Color", Flag = "Background/Color", Value = { 0, 0, 0, 0, false },
+    Callback = function(v, col)
+        win.Background.ImageColor3 = col
+        win.Background.ImageTransparency = v[4]
+    end
+})
+sBg:Textbox({ HideName = true, Flag = "Background/CustomImage", Placeholder = "rbxassetid://ImageId", Callback = function(v, apply) if apply then win.Background.Image = v end end })
+sBg:Dropdown({
+    HideName = true, Flag = "Background/Image",
+    List = {
+        { Name = "Legacy", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://2151741365"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Hearts", Mode = "Button", Value = true, Callback = function() win.Background.Image = "rbxassetid://6073763717"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Abstract", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://6073743871"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Hexagon", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://6073628839"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Circles", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://6071579801"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Lace With Flowers", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://6071575925"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Floral", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://5553946656"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Halloween", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://11113209821"; win.Flags["Background/CustomImage"] = "" end },
+        { Name = "Christmas", Mode = "Button", Callback = function() win.Background.Image = "rbxassetid://11711560928"; win.Flags["Background/CustomImage"] = "" end }
+    }
+})
+
+sBg:Slider({ Name = "Tile Offset", Flag = "Background/Offset", Wide = true, Min = 100, Max = 300, Value = 300, Callback = function(v) win.Background.TileSize = UDim2.fromOffset(v, v) end })
+
+win:SetValue("Background/Offset", 300)
+win:AutoLoadConfig("Nigalose")
+win:SetValue("UI/Enabled", win.Flags["UI/OOL"])
